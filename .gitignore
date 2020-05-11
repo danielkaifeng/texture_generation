@@ -1,0 +1,7 @@
+AnimeGAN
+__pycache__
+log/*
+bk_log
+gen_output
+images
+*/__pycache__

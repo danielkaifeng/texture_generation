@@ -4,6 +4,7 @@ def D_net(x_init, ch, n_dis, sn, scope, reuse):
     channel = ch // 2
     with tf.variable_scope(scope, reuse=reuse):
         x = conv(x_init, channel, kernel=3, stride=1, pad=1, use_bias=False, sn=sn, scope='conv_0')
+        x = tf.layers.dropout(x, 0.2)
         x = lrelu(x, 0.2)
 
         for i in range(1, n_dis):
@@ -13,6 +14,7 @@ def D_net(x_init, ch, n_dis, sn, scope, reuse):
             x = conv(x, channel * 4, kernel=3, stride=1, pad=1, use_bias=False, sn=sn, scope='conv_s1_' + str(i))
             x = instance_norm(x, scope='ins_norm_' + str(i))
             x = lrelu(x, 0.2)
+            x = tf.layers.dropout(x, 0.2) 
 
             channel = channel * 2
 

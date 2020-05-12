@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import math
-from net.generator import G_net, Upsample, Upsample2
+from net.generator import *
 from net.discriminator import D_net
 
 
@@ -41,20 +41,24 @@ class build_network():
         self.dropout = tf.placeholder(tf.float32, name='dropout')
         self.is_train = tf.placeholder(tf.bool, name='is_train')
 
-        self.ch = 64
+        self.ch = 32
         self.n_dis = 4
         self.sn = 2 #stride num
         
-        feature = self.mapping_network(self.z)
 
-        self.logits = sgenerator(self.x)
-        self.logit2 = sgenerator(feature, reuse=True)
-        #generator = G_net(self.x)
-        #self.logits = generator.fake 
+        with tf.variable_scope("generator") as scope:
+            en_list = self.encoder(self.x) 
+            feature = self.constant_input(en_list) 
+            self.logits = self.sgenerator(feature)
+
+            #feature2 = self.mapping_network(self.z)
+            #self.logit2 = self.sgenerator(feature2, reuse=True)
+            #generator = G_net(self.x)
+            #self.logits = generator.fake 
 
         scope = "discriminator"
-        self.D_fake = self.discriminator(self.logit2)
-        self.D_fake2 = self.discriminator(self.logits, reuse=True)
+        self.D_fake = self.discriminator(self.logits)
+        #self.D_fake2 = self.discriminator(self.logit2, reuse=True)
         self.D_real = self.discriminator(self.label, reuse=True, scope=scope)
 
         #self.D_real = dis(self.label)
@@ -63,10 +67,12 @@ class build_network():
         #self.reconst_loss = tf.reduce_mean(tf.squared_difference(self.x, self.x_))
         #mean, variance = tf.nn.moments(self.feature, axes=0)
         #self.reconst_loss +=  tf.reduce_mean(tf.square(variance -1) + tf.square(mean)) 
-        self.D_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_real, labels=tf.zeros_like(self.D_real))) + tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake, labels=tf.ones_like(self.D_fake)))
+        self.D_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_real, labels=tf.zeros_like(self.D_real))) + \
+                tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake, labels=tf.ones_like(self.D_fake))) 
+                #tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake2, labels=tf.ones_like(self.D_fake2))) 
+
         self.G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake, labels=tf.zeros_like(self.D_fake)))
         #self.G_loss += tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake2, labels=tf.zeros_like(self.D_fake2)))
-
 
         discriminator_vars =  [var for var in tf.global_variables() if  "discriminator" in var.name]
         generator_vars =  [var for var in tf.global_variables() if  "generator" in var.name]
@@ -77,15 +83,37 @@ class build_network():
         self.all_loss = self.G_loss + l2_weight * self.l2_loss
 
         self.D_opt = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.D_loss, var_list=discriminator_vars)
-        self.G_opt = tf.train.AdamOptimizer(learning_rate=0.1*learning_rate).minimize(self.G_loss, var_list=generator_vars)
-        self.R_opt = tf.train.AdamOptimizer(learning_rate=0.1*learning_rate).minimize(self.l2_loss, var_list=generator_vars)
+        self.G_opt = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.G_loss, var_list=generator_vars)
+        self.R_opt = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.l2_loss, var_list=generator_vars)
 
     def discriminator(self, x_init, reuse=False, scope="discriminator"):
         D = D_net(x_init, self.ch, self.n_dis, self.sn, reuse=reuse, scope=scope)
         return D
 
-    def mapping_network(self, z):
+    def constant_input(self, en):
         with tf.variable_scope("generator") as scope:
+            #x = tf.Variable(tf.truncated_normal([1, 4,4,1], mean=0.0, stddev=1.0, dtype=tf.float32, name='bottom'))
+            #x = tf.layers.dense(x, 32)
+            #x += en[-1] 
+            x = en[-1]
+            #x = Conv2DTransposeLReLU(x, 128, 2, 2) #8x8
+            x = Upsample2(x, 128)
+            x += en[3] 
+            #x = lrelu(x)
+            #x = Conv2DTransposeLReLU(x, 128, 2, 2) #16x16
+            x = Upsample2(x, 128)
+            x += en[2] 
+            #x = lrelu(x)
+            x = Upsample2(x, 128)
+            x += en[1] 
+            x = lrelu(x)
+            x = Upsample(x, 3)
+            x += en[0] 
+        
+        return x
+
+    def mapping_network(self, z):
+        with tf.variable_scope("mapping") as scope:
             x = tf.layers.dense(z, 64)
             x = tf.layers.dense(x, 128)
             x = tf.layers.dense(x, 128)
@@ -102,55 +130,71 @@ class build_network():
     def conv2d(self, x, filters, kernel_size, s):
         x = tf.layers.conv2d(x, filters=filters, kernel_size=kernel_size, strides=(s, s), padding='same', activation=leaky_relu)
         x = tf.layers.batch_normalization(x)
-        x = tf.layers.dropout(x, 0.2)
+        #x = tf.layers.dropout(x, 0.2)
         return x
 
     def encoder(self, x):
-        with tf.variable_scope("generator") as scope:
-            x = self.conv2d(x, 32, (3,3), 2)
-            x = self.conv2d(x, 64, (3,3), 1)
-            x = self.conv2d(x, 128, (3,3), 1)
-            x = self.conv2d(x, 128, (3,3), 1)
-            x = self.conv2d(x, 3, (3,3), 1)
+        en_list = [x] #x: 64x64
+        with tf.variable_scope("encoder") as scope:
+            x = self.conv2d(x, 128, (3,3), 2) #32x32
+            en_list.append(x)
+            x = self.conv2d(x, 128, (3,3), 1) 
+            x = self.conv2d(x, 128, (3,3), 2) #16x16
+            en_list.append(x)
+            x = self.conv2d(x, 128, (3,3), 1) 
+            x = self.conv2d(x, 128, (3,3), 2) #8x8
+            en_list.append(x)
+            x = self.conv2d(x, 32, (3,3), 1) 
+            x = self.conv2d(x, 32, (3,3), 2) #4x4
+            en_list.append(x)
 
-        return encoder
 
-def sgenerator(x, reuse = False): 
-    with tf.variable_scope("generator") as scope:
-        if reuse:
-            scope.reuse_variables()
-        #x = tf.reshape(x, [-1, 128, 128, 3])
-        #net = tf.map_fn(lambda im: tf.image.random_flip_left_right(im), x)
-        #x = tf.layers.conv2d(x, filters=32, kernel_size=(3,3), strides=(2, 2), padding='same', activation=leaky_relu)
-        #x = tf.layers.batch_normalization(x)
-        #x = tf.layers.dropout(x, 0.2)
-        x = tf.layers.conv2d(x, filters=32, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
-        x = tf.layers.batch_normalization(x)
-        x = tf.layers.dropout(x, 0.2)
-        
-        #x = tf.contrib.layers.conv2d_transpose(x, 32, 3, stride=2, padding='same', 
-        #                activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
-        x = Upsample2(x, 128)
-        x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
-        x = tf.layers.dropout(x, 0.2)
+        return en_list
 
-        #x = tf.contrib.layers.conv2d_transpose(x, 32, 3, stride=2, padding='same', 
-        #                activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
-        #x = Upsample(x, 128)
-        #x = tf.layers.dropout(x, 0.2)
-        x = Upsample(x, 128)
-        #x = tf.contrib.layers.conv2d_transpose(x, 64, 3, stride=2, padding='same', activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
-        x = tf.layers.dropout(x, 0.2)
+    def sgenerator(self, x, reuse = False): 
+        with tf.variable_scope("s_gen") as scope:
+            if reuse:
+                scope.reuse_variables()
+            #x = tf.reshape(x, [-1, 128, 128, 3])
+            #net = tf.map_fn(lambda im: tf.image.random_flip_left_right(im), x)
+            #x = tf.layers.conv2d(x, filters=32, kernel_size=(3,3), strides=(2, 2), padding='same', activation=leaky_relu)
+            #x = tf.layers.batch_normalization(x)
+            #x = tf.layers.dropout(x, 0.2)
+            x = tf.layers.conv2d(x, filters=32, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.batch_normalization(x)
+            x = tf.layers.dropout(x, 0.2)
+            
+            #x = tf.contrib.layers.conv2d_transpose(x, 32, 3, stride=2, padding='same', 
+            #                activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
+            x = Upsample2(x, 128)
+            x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.dropout(x, 0.2)
 
-        x = tf.layers.conv2d(x, filters=128, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
-        x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
-        x = tf.layers.batch_normalization(x)
-        x = tf.layers.dropout(x, 0.2)
-        x = tf.layers.conv2d(x, filters=3, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
-        x = tf.nn.tanh(x)
-        return x
+            x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.batch_normalization(x)
+            x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.batch_normalization(x)
+            x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.batch_normalization(x)
+
+            #x = tf.contrib.layers.conv2d_transpose(x, 32, 3, stride=2, padding='same', 
+            #                activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
+            #x = Upsample(x, 128)
+            #x = tf.layers.dropout(x, 0.2)
+            x = Upsample(x, 128)
+            #x = tf.contrib.layers.conv2d_transpose(x, 64, 3, stride=2, padding='same', activation_fn=leaky_relu, normalizer_fn=tf.contrib.layers.batch_norm)
+            x = tf.layers.dropout(x, 0.2)
+
+            x = tf.layers.conv2d(x, filters=128, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.conv2d(x, filters=64, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.layers.batch_normalization(x)
+            x = tf.layers.dropout(x, 0.2)
+            x = tf.layers.conv2d(x, filters=3, kernel_size=(3,3), strides=(1, 1), padding='same', activation=leaky_relu)
+            x = tf.nn.tanh(x)
+            return x
 
 def discrim_conv(batch_input, out_channels, stride):
+    input = batch_input + tf.random_normal(shape=tf.shape(batch_input), mean=0.0, stddev=0.1, dtype=tf.float32)
     padded_input = tf.pad(batch_input, [[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT")
     return tf.layers.conv2d(padded_input, out_channels, kernel_size=4, strides=(stride, stride), padding="valid", kernel_initializer=tf.random_normal_initializer(0, 0.02))
 

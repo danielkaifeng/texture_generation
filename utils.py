@@ -35,8 +35,7 @@ def latest_checkpoint(path):
         print('\n---------->read checkpoint %s\n' % point)
     return point
 
-def restore_checkpoint(sess):
-    saver=tf.train.Saver()
+def restore_checkpoint(saver, sess):
     point = latest_checkpoint('log')
     saver.restore(sess,"log/%s"%point)
     return saver
